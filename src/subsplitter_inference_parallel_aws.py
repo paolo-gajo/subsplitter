@@ -1,19 +1,15 @@
 from transformers import AutoTokenizer, T5ForConditionalGeneration
 import pandas as pd
 from tqdm.auto import tqdm
-from split_merge_long_trascription_srt import merge_subtitles
+from split_merge_long_trascription_srt import merge_subtitles, split_subs_into_sentences
 
 # check if cuda is available
 import torch
 print('cuda available:', torch.cuda.is_available())
 
 tokenizer = AutoTokenizer.from_pretrained("t5-base")
-model_path = r"D:\Google Drive\WORK\automation\subsplitter\models\flan-t5-base_7epochs_best"
+model_path = r"pgajo/aws-subsplitter"
 model = T5ForConditionalGeneration.from_pretrained(model_path, device_map = 'cuda')
-epochs = model_path.split('/')[-1].split('_')[-1]
-# get numbers from 'epochs' string
-epochs = ''.join([s for s in epochs if s.isdigit()])
-print('epochs:', epochs)
 
 import os
 import re
@@ -123,7 +119,7 @@ def replace_laughter(text):
     return substituted_text
 
 def sub_replacements(text):
-    df_replacements = pd.read_csv(r"D:\Google Drive\WORK\automation\replacements.tsv", sep='\t')
+    df_replacements = pd.read_csv(r"/home/pgajo/working/subtitling/subsplitter/replacements.tsv", sep='\t')
     replacements = list(zip(df_replacements['original'], df_replacements['replacement']))
     for original, replacement in replacements:
         text = text.replace(original, replacement)
@@ -132,7 +128,7 @@ def sub_replacements(text):
 def pre_editing(text):
     text = text.replace('\n\n\n', '\n\n')
     text = text.replace('♪', '#')
-    text = sub_replacements(text)
+    # text = sub_replacements(text)
     text = add_quotes(text)
     text = replace_laughter(text)
     return text
@@ -140,7 +136,7 @@ def pre_editing(text):
 def post_editing(text):
     text = text.replace('\n\n\n', '\n\n')
     text = text.replace('#', '♪')
-    text = sub_replacements(text)
+    # text = sub_replacements(text)
     text = add_quotes(text)
     text = replace_laughter(text)
     return text
@@ -151,7 +147,7 @@ def batch(iterable, n=1):
     for ndx in range(0, l, n):
         yield iterable[ndx:min(ndx + n, l)]
 
-def split_subtitles(text, filename, batch_size=64):
+def split_subtitles(text, filename, batch_size=1):
     text = pre_editing(text)
 
     blocks = text.strip().split('\n\n')
@@ -162,12 +158,14 @@ def split_subtitles(text, filename, batch_size=64):
         for batch_blocks in tqdm(batch(blocks, batch_size)):
             # Preparing inputs for the batch
             inputs = [block.split('\n')[2] for block in batch_blocks]  # Extracting the input lines
+            print(inputs)
             input_ids = tokenizer(inputs, padding=True, return_tensors="pt").input_ids.to('cuda')
 
             # Model inference in batches
             outputs = model.generate(input_ids, max_length=256)
             decoded_outputs = [tokenizer.decode(output, skip_special_tokens=True) for output in outputs]
-
+            print(decoded_outputs)
+            print('----------------')
             # Process each block in the batch
             for i, output_line in enumerate(decoded_outputs):
                 block = batch_blocks[i]
@@ -237,12 +235,14 @@ def split_subtitles(text, filename, batch_size=64):
     
     return subtitle_file_content
 
-filename = r'd:\Google Drive\WORK\1TRANSCRIBE\PAW_RUBBLE S7 90min_proxy_wd.srt'
+filename = r"/home/pgajo/working/subtitling/subsplitter/data/ITA03_Matteo_proxy - Copy.srt"
 suffix = f'_subsplitter'
 output_filename = re.sub('.srt', f'{suffix}.srt', filename)
 
 with open(filename, 'r', encoding='utf8') as f:
     text = f.read()
+    text = merge_subtitles(split_subs_into_sentences(text))
+    # print(text)
     split_subtitles(text, output_filename)
 
 # replace \n\n\n with \n\n in the whole output file

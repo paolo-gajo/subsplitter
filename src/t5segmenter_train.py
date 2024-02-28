@@ -6,10 +6,12 @@ from transformers.trainer_callback import TrainerControl, TrainerState
 from transformers.training_args import TrainingArguments
 import os
 
+nchars = 37
+
 # Load the data into a pandas DataFrame
-df = pd.read_csv('/home/pgajo/working/subtitling/subsplitter/data/t5_subsplitter_dataset_20231103.csv')
+df = pd.read_csv('/home/pgajo/working/subtitling/subsplitter/data/aws/merged_srts/aws_subsplitter_train.csv')
 # display(df)
-df = df[df['line_length'] > 32]
+df = df[df['line_length'] > nchars]
 print(df)
 # Preprocess the data: prepend 'segment: ' to the NO_LB_wPOS column
 # df['NO_LB'] = 'segment: ' + df['NO_LB']
@@ -24,6 +26,24 @@ train_df, val_df = train_test_split(df, test_size=0.1)
 # model_name = 't5-base'
 model_name = 'google/flan-t5-base'
 tokenizer = T5Tokenizer.from_pretrained(model_name)
+
+nolb = df['NO_LB']
+lb = df['NO_LB']
+numtokens_nolb = 0
+numtokens_lb = 0
+
+for line in nolb:
+    numtokensline = len(tokenizer(line)['input_ids'])
+    if numtokensline > numtokens_nolb:
+        numtokens_nolb = numtokensline
+
+for line in lb:
+    numtokensline = len(tokenizer(line)['input_ids'])
+    if numtokensline > numtokens_lb:
+        numtokens_lb = numtokensline
+
+max_len = max(numtokens_lb, numtokens_nolb)
+print('max_len', max_len)
 
 model = T5ForConditionalGeneration.from_pretrained(model_name)
 
@@ -40,13 +60,13 @@ model = T5ForConditionalGeneration.from_pretrained(model_name)
 
 
 # Tokenize the data and prepare the inputs for the model
-train_encodings = tokenizer(train_df['NO_LB'].tolist(), truncation=True, padding=True, max_length=64)
+train_encodings = tokenizer(train_df['NO_LB'].tolist(), padding=True, max_length=max_len)
 # print(train_encodings['input_ids'][0])
-val_encodings = tokenizer(val_df['NO_LB'].tolist(), truncation=True, padding=True, max_length=64)
+val_encodings = tokenizer(val_df['NO_LB'].tolist(), padding=True, max_length=max_len)
 
 # Prepare the labels (the sentence with line breaks)
-train_labels = tokenizer(train_df['LB'].tolist(), truncation=True, padding=True, max_length=64).input_ids
-val_labels = tokenizer(val_df['LB'].tolist(), truncation=True, padding=True, max_length=64).input_ids
+train_labels = tokenizer(train_df['LB'].tolist(), padding=True, max_length=max_len).input_ids
+val_labels = tokenizer(val_df['LB'].tolist(), padding=True, max_length=max_len).input_ids
 
 # Prepare the PyTorch datasets
 class LineBreakDataset(torch.utils.data.Dataset):
@@ -69,8 +89,8 @@ val_dataset = LineBreakDataset(val_encodings, val_labels)
 training_args = TrainingArguments(
     output_dir='./results', 
     num_train_epochs=10,
-    per_device_train_batch_size=16,  
-    per_device_eval_batch_size=16,  
+    per_device_train_batch_size=4,  
+    per_device_eval_batch_size=4,  
     warmup_steps=500,  
     weight_decay=0.01,
     # logging_dir='./logs',
@@ -78,12 +98,13 @@ training_args = TrainingArguments(
     logging_steps=100,
     report_to='none',
     evaluation_strategy='epoch',
-    save_strategy='no',
+    save_strategy='epoch',
+    load_best_model_at_end = True
 )
 
 import time
 
-model_type = 'sublinebreak/'
+model_type = 'aws/'
 date = time.strftime("%Y%m%d-%H%M%S")+'/'
 save_dir = f'/home/pgajo/working/subtitling/subsplitter/models/{model_type}{date}{model_name}_{int(training_args.num_train_epochs)}epochs'
 if not os.path.exists(save_dir):
@@ -112,3 +133,9 @@ trainer = Trainer(
 )
 
 trainer.train()
+
+from huggingface_hub import login
+token="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"
+login(token=token)
+model_save_name = f"pgajo/aws-subsplitter"
+model.push_to_hub(model_save_name)
