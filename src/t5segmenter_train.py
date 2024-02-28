@@ -135,7 +135,7 @@ trainer = Trainer(
 trainer.train()
 
 from huggingface_hub import login
-token="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"
+token=os.environ['HF_TOKEN']
 login(token=token)
 model_save_name = f"pgajo/aws-subsplitter"
 model.push_to_hub(model_save_name)
